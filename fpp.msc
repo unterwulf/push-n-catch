@@ -1,0 +1,58 @@
+title File push protocol
+participant push
+
+note left of push
+Pusher wants to push
+a file FILENAME of
+length LENGTH.
+end note
+
+push->catch: MSG_PUSH(FILENAME, LENGTH)
+
+alt Catcher refuses to receive FILENAME, most likely because it already has a bigger file with the same name
+    catch->push: MSG_REJECT
+else Catcher agrees to receive FILENAME, most likely because it doesn't have a file with the name FILENAME
+    catch->push: MSG_ACCEPT
+    push->catch: content(FILENAME)
+    push->catch: digest(content(FILENAME))
+    alt Digests do not match
+        catch->push: MSG_NACK
+    else Digests match
+        catch->push: MSG_ACK
+    end
+else Catcher agrees to receive continuation of FILENAME from offset CATCHER_LENGTH, most likely because it already has a file with the same name and its length CATCHER_LENGTH is smaller or equal to LENGTH (if CATCHER_LENGTH equals LENGTH this sequence will let Pusher ensure that FILENAME has identical content on both sides)
+    catch->push: MSG_RESUME(CATCHER_LENGTH)
+    alt Pusher refuses to resume pushing to an existing file
+        push->catch: MSG_REJECT
+    else Pusher agrees to resume pushing to an existing file from offset CATCHER_LENGTH
+        push->catch: MSG_ACCEPT
+
+note over push, catch
+Both sides calculate digests of [1; CATCHER_LENGTH] of content(FILENAME)
+end note
+
+        push->catch: digest([1; CATCHER_LENGTH] of content(FILENAME))
+
+        alt Digests do not match
+            catch->push: MSG_NACK
+        else Digests match
+            catch->push: MSG_ACK
+            opt LENGTH > CATCHER_LENGTH
+                push->catch: (CATCHER_LENGTH; LENGTH] of content(FILENAME)
+                push->catch: digest(content(FILENAME))
+                alt Digests do not match
+                    catch->push: MSG_NACK
+                else Digests match
+                    catch->push: MSG_ACK
+                end
+            end
+        end
+    end
+end
+
+note left of push
+Pusher can close
+the connection at this
+point or start
+pushing next file.
+end note

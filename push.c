@@ -214,8 +214,10 @@ static const char *basename(const char *pathname)
     return base ? (base + 1) : pathname;
 }
 
-static void push_chunk(int sockfd, FILE *fp, off_t total, SHA1_CTX *sha1_ctx)
+static int push_chunk(int sockfd, FILE *fp, off_t total, SHA1_CTX *sha1_ctx)
 {
+    fpp_msg_t rsp;
+    struct sha1 digest;
     off_t nleft = total;
 
     while (nleft > 0 && !terminate) {
@@ -241,14 +243,31 @@ static void push_chunk(int sockfd, FILE *fp, off_t total, SHA1_CTX *sha1_ctx)
     }
 
     if (nleft > 0) {
-        die("Transmission terminated at %llu of %llu bytes",
+        err("Transmission terminated at %llu of %llu bytes",
             (unsigned long long)(total - nleft), (unsigned long long)total);
+        return 0;
     }
+
+    /* Once transmission of file is completed, we must send our digest,
+     * so the peer can ensure that the transmission was correct. */
+    SHA1Final((unsigned char *)&digest, sha1_ctx);
+    xsend(sockfd, &digest, sizeof digest, 0);
+    xrecv(sockfd, &rsp, sizeof rsp, 0);
+
+    if (rsp == MSG_NACK) {
+        err("Transfer completed, but peer reports that digests do NOT match");
+        return 0;
+    } else if (rsp == MSG_ACK) {
+        info("Transfer completed");
+    } else {
+        die("Unexpected response");
+    }
+    return 1;
 }
 
 void send_push_request(int sockfd, const char *filename, off_t filelen)
 {
-    uint8_t msg = FPP_MSG(MSG_PUSH, 0);
+    fpp_msg_t msg = MSG_PUSH;
     uint16_t namelen = strlen(filename);
     uint16_t be_namelen = htons(namelen);
     fpp_off_t be_filelen = hton_offset(filelen);
@@ -271,17 +290,14 @@ off_t get_file_len(const char *pathname)
     return sb.st_size;
 }
 
-static void push_file(int sockfd, const char *pathname)
+static int push_file(int sockfd, const char *pathname)
 {
-    FILE *fp;
-    fpp_off_t peerfilelen = 0;
-    struct sha1 peer_digest;
-    uint8_t msg;
+    fpp_msg_t msg;
     const char *filename = basename(pathname);
     off_t filelen = get_file_len(pathname);
+    int ret = 1;
 
-    /* b in mode is important for Windows */
-    fp = fopen(pathname, "rb");
+    FILE *fp = fopen(pathname, "rb"); /* b in mode is important for Windows */
     if (!fp)
         die_errno("Cannot open file %s", pathname);
 
@@ -289,42 +305,37 @@ static void push_file(int sockfd, const char *pathname)
 
     xrecv(sockfd, &msg, sizeof msg, 0);
 
-    if (!IS_MSG_TYPE(msg, MSG_REJECT) && !IS_MSG_TYPE(msg, MSG_ACCEPT))
-        die("Unexpected response");
+    if (msg == MSG_REJECT) {
+        err("Peer rejected file %s", filename);
+        ret = 0;
+    } else if (msg == MSG_ACCEPT) {
+        SHA1_CTX sha1_ctx;
+        SHA1Init(&sha1_ctx);
 
-    if (HAS_MSG_FLAG(msg, MSG_FLAGS_OFFSET)) {
+        info("Sending file %s (%llu bytes)", pathname,
+             (unsigned long long)filelen);
+
+        ret = push_chunk(sockfd, fp, filelen, &sha1_ctx);
+    } else if (msg == MSG_RESUME) {
         /* Peer indicated that it already has our file */
+        fpp_off_t peerfilelen;
+        SHA1_CTX sha1_ctx;
+        SHA1Init(&sha1_ctx);
+
         xrecv(sockfd, &peerfilelen, sizeof peerfilelen, 0);
         peerfilelen = ntoh_offset(peerfilelen);
 
-        if (IS_MSG_TYPE(msg, MSG_ACCEPT))
-            xrecv(sockfd, &peer_digest, sizeof peer_digest, 0);
-
         if (peerfilelen > (fpp_off_t)filelen)
-            info("Peer already has a bigger file %s (ours %llu, theirs %llu)",
-                 filename,
-                 (unsigned long long)filelen,
-                 (unsigned long long)peerfilelen);
-    }
-
-    if (IS_MSG_TYPE(msg, MSG_REJECT)) {
-        if (HAS_MSG_FLAG(msg, MSG_FLAGS_ALL))
-            die("Peer rejected this and any further files");
-
-        info("Peer rejected file %s", filename);
-    } else {
-        SHA1_CTX sha1_ctx;
-        struct sha1 digest;
-        off_t ntotal = filelen;
-
-        if (peerfilelen > (fpp_off_t)ntotal)
             die("Unexpected response");
 
-        SHA1Init(&sha1_ctx);
+        msg = MSG_ACCEPT;
+        xsend(sockfd, &msg, sizeof msg, 0);
 
-        if (peerfilelen) {
+        /* Calculate our digest */ {
             off_t nleft = peerfilelen;
-            SHA1_CTX tmp_sha1_ctx;
+            info("Calculating SHA1 of initial %llu bytes of %s...",
+                 (unsigned long long)nleft, filename);
+
             while (nleft > 0 && !terminate) {
                 unsigned char buf[BLOCKSIZE];
                 size_t chunk = (nleft > BLOCKSIZE) ? BLOCKSIZE : nleft;
@@ -335,53 +346,46 @@ static void push_file(int sockfd, const char *pathname)
                     nleft -= chunk;
                 }
             }
-            if (terminate) {
-                // TODO
-            }
 
-            tmp_sha1_ctx = sha1_ctx;
+            if (terminate)
+                die("Terminated");
+        }
+
+        /* Send our digest */ {
+            struct sha1 digest;
+            SHA1_CTX tmp_sha1_ctx = sha1_ctx;
             SHA1Final((unsigned char *)&digest, &tmp_sha1_ctx);
-            if (memcmp(&peer_digest, &digest, sizeof digest)) {
-                die("Digests do not match");
+            xsend(sockfd, &digest, sizeof digest, 0);
+        }
+
+        xrecv(sockfd, &msg, sizeof msg, 0);
+        if (msg == MSG_NACK) {
+            err("Peer already has a different file %s (digests do not match)",
+                filename);
+            ret = 0;
+        } else if (msg == MSG_ACK) {
+            if ((fpp_off_t)filelen == peerfilelen) {
+                info("Peer already has exactly the same file (digests match)");
+            } else {
+                info("Resume sending of file %s from %llu (%llu bytes)",
+                     pathname,
+                     (unsigned long long)peerfilelen,
+                     (unsigned long long)filelen);
+                ret = push_chunk(sockfd, fp, filelen - peerfilelen, &sha1_ctx);
             }
-
-            /* Inform peer that we are OK with received checksum
-             * and will sent the remaining part of the file. */
-            msg = FPP_MSG(MSG_ACCEPT, 0);
-            xsend(sockfd, &msg, sizeof msg, 0);
-
-            ntotal -= peerfilelen;
+        } else {
+            die("Unexpected response");
         }
-
-        if (!peerfilelen) {
-            info("Sending file %s (%llu bytes)", pathname,
-                 (unsigned long long)ntotal);
-        } else if (ntotal) {
-            info("Sending remaining %llu bytes of %s",
-                 (unsigned long long)ntotal, pathname);
-        }
-        push_chunk(sockfd, fp, ntotal, &sha1_ctx);
-
-        /* Once transmission of file is completed, peer must send us the
-         * checksum, so we can ensure that the transmission was correct. */
-        xrecv(sockfd, &peer_digest, sizeof peer_digest, 0);
-
-        SHA1Final((unsigned char *)&digest, &sha1_ctx);
-        info("Peer SHA1: %s", sha1_str(&peer_digest));
-        info("Our SHA1: %s", sha1_str(&digest));
-        if (memcmp(&peer_digest, &digest, sizeof digest)) {
-            die("Digests do not match");
-        }
-        if (ntotal)
-            info("Transfer completed");
-        else
-            info("Nothing needs to be sent");
+    } else {
+        die("Unexpected response");
     }
     fclose(fp);
+    return ret;
 }
 
 int main(int argc, const char *argv[])
 {
+    int ret = EXIT_SUCCESS;
     int i;
     int sockfd;
     struct sockaddr_in sa;
@@ -422,8 +426,9 @@ int main(int argc, const char *argv[])
         die_neterr("Cannot connect to remote host");
 
     for (i = 2; i < argc && !terminate; i++)
-        push_file(sockfd, argv[i]);
+        if (!push_file(sockfd, argv[i]))
+            ret = EXIT_FAILURE;
 
     closesocket(sockfd);
-    return 0;
+    return ret;
 }

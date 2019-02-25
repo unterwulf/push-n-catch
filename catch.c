@@ -47,209 +47,256 @@ static void handle_discovery(int fd)
     }
 }
 
-int handle_request(int sockfd)
+static inline int send_short_msg(int sockfd, fpp_msg_t msg)
 {
-    FILE *fp = NULL;
-    char *filename = NULL;
-    uint16_t namelen;
-    fpp_off_t filelen;
-    struct stat sb;
-    uint8_t msg_type = MSG_ACCEPT;
-    uint8_t msg;
-    off_t nleft, ntotal;
-    int flags = 0;
-    int rc;
-    SHA1_CTX sha1_ctx;
-    struct sha1 digest;
+    return send_entire_check(sockfd, &msg, sizeof msg, 0);
+}
 
-    SHA1Init(&sha1_ctx);
+static int receive_chunk(int sockfd, FILE *fp, off_t len, SHA1_CTX *sha1_ctx)
+{
+    int rv = 1;
+    off_t nleft = len;
 
-    rc = recv_entire(sockfd, &msg, sizeof msg, 0);
-    /* It's ok if peer closes connection at this point */
-    if (rc == ECONNCLOSED || check_recv(rc) != 0)
-        return rc;
-
-    if (!IS_MSG_TYPE(msg, MSG_PUSH)) {
-        err("Unexpected request");
-        return 0;
+    while (nleft && !terminate) {
+        unsigned char buf[BLOCKSIZE];
+        ssize_t chunk = (nleft > BLOCKSIZE) ? BLOCKSIZE : nleft;
+        ssize_t nreceived = recv(sockfd, (char *)buf, chunk, 0);
+        if (nreceived == -1 && errno == EINTR) {
+            /* try again */;
+        } else if (nreceived <= 0) {
+            if (!nreceived)
+                err("Peer unexpectedly closed connection");
+            break; /* not terminate = 1; */
+        } else {
+            size_t nwritten = fwrite(buf, 1, nreceived, fp);
+            nleft -= nwritten;
+            if (nwritten != (size_t)nreceived) {
+                err("Write error");
+                break; /* not terminate = 1; */
+            }
+            SHA1Update(sha1_ctx, buf, nwritten);
+        }
     }
 
-    if (recv_entire_check(sockfd, &namelen, sizeof namelen, 0) != 0)
-        return 0;
+    if (nleft > 0) {
+        err("Transmission aborted, only %llu of %llu bytes received",
+            (unsigned long long)(len - nleft), (unsigned long long)len);
+    } else {
+        struct sha1 digest, peer_digest;
 
-    namelen = ntohs(namelen);
-    filename = malloc(namelen + 1);
-    if (!filename)
-        return 0;
+        SHA1Final((unsigned char *)&digest, sha1_ctx);
+        rv = recv_entire_check(sockfd, &peer_digest, sizeof peer_digest, 0);
+        if (!rv) {
+            if (memcmp(&digest, &peer_digest, sizeof digest)) {
+                err("Our SHA1 digest: %s", sha1_str(&digest));
+                err("Peer SHA1 digest: %s", sha1_str(&peer_digest));
+                err("Transfer completed (digests do NOT match)");
+                rv = send_short_msg(sockfd, MSG_NACK);
+            } else {
+                info("Transfer completed");
+                rv = send_short_msg(sockfd, MSG_ACK);
+            }
+        }
+    }
 
-    if (recv_entire_check(sockfd, filename, namelen, 0) != 0)
-        goto fail;
+    return rv;
+}
 
-    filename[namelen] = '\0';
+static int reject_file(int sockfd, const char *filename, fpp_off_t filelen)
+{
+    int rv = send_short_msg(sockfd, MSG_REJECT);
+    if (!rv) {
+        info("Rejected file %s (%llu bytes)",
+             filename, (unsigned long long)filelen);
+    }
+    return rv;
+}
 
-    if (recv_entire_check(sockfd, &filelen, sizeof filelen, 0) != 0)
-        goto fail;
+static int accept_file(int sockfd, FILE *fp, const char *filename,
+                       fpp_off_t filelen)
+{
+    int rv = send_short_msg(sockfd, MSG_ACCEPT);
+    if (!rv) {
+        SHA1_CTX sha1_ctx;
+        info("Receiving file %s (%llu bytes)...",
+             filename, (unsigned long long)filelen);
+        SHA1Init(&sha1_ctx);
+        rv = receive_chunk(sockfd, fp, filelen, &sha1_ctx);
+    }
+    return rv;
+}
 
-    filelen = ntoh_offset(filelen);
-    ntotal = filelen;
+static int resume_negotiated_file(int sockfd, FILE *fp, const char *filename,
+                                  fpp_off_t filelen, off_t pos)
+{
+    int rv;
+    off_t nleft = pos;
+    SHA1_CTX sha1_ctx;
 
-    sanitize_filename(filename);
+    info("Calculating SHA1 of local %s...", filename);
 
-    info("Push request of file %s (%llu bytes)", filename, filelen);
-
-    rc = stat(filename, &sb);
-    if (rc != 0 && errno != ENOENT) {
-        err("Cannot stat file %s", filename);
-        msg_type = MSG_REJECT;
-    } else if (rc == 0) {
-        if (!S_ISREG(sb.st_mode)) {
-            err("Not a regular file %s", filename);
-            msg_type = MSG_REJECT;
+    SHA1Init(&sha1_ctx);
+    while (nleft > 0 && !terminate) {
+        unsigned char buf[BLOCKSIZE];
+        size_t chunk = (nleft > BLOCKSIZE) ? BLOCKSIZE : nleft;
+        if (fread(buf, 1, chunk, fp) != chunk) {
+            die("Read error");
         } else {
-            flags |= MSG_FLAGS_OFFSET;
+            SHA1Update(&sha1_ctx, buf, chunk);
+            nleft -= chunk;
+        }
+    }
+
+    if (terminate) {
+        rv = EINTR;
+    } else {
+        struct sha1 peer_digest;
+        rv = recv_entire_check(sockfd, &peer_digest, sizeof peer_digest, 0);
+
+        if (!rv) {
+            SHA1_CTX sha1_tmp_ctx = sha1_ctx;
+            struct sha1 digest;
+            SHA1Final((unsigned char *)&digest, &sha1_tmp_ctx);
+
+            if (memcmp(&digest, &peer_digest, sizeof digest)) {
+                info("Digests do not match");
+                rv = send_short_msg(sockfd, MSG_NACK);
+            } else {
+                rv = send_short_msg(sockfd, MSG_ACK);
+                if (!rv) {
+                    off_t chunklen = filelen - pos;
+                    if (chunklen > 0) {
+                        info("Receiving continuation of file %s "
+                             "(%llu bytes)...",
+                             filename, (unsigned long long)chunklen);
+
+                        /* C standard requires a call to a file position
+                         * function when switching from reading to writing.
+                         * Unless this is done, following fwrite fails
+                         * on Windows. */
+                        fseek(fp, 0L, SEEK_CUR);
+
+                        rv = receive_chunk(sockfd, fp, chunklen, &sha1_ctx);
+                    } else {
+                        info("Digests match, nothing to receive");
+                    }
+                }
+            }
+        }
+    }
+    return rv;
+}
+
+static int resume_file(int sockfd, FILE *fp, const char *filename,
+                       fpp_off_t filelen, off_t pos)
+{
+    struct {
+        fpp_msg_t msg;
+        fpp_off_t off;
+    } __attribute__ ((packed)) rsp = { MSG_RESUME, hton_offset(pos) };
+
+    int rv = send_entire_check(sockfd, &rsp, sizeof rsp, 0);
+    if (!rv) {
+        fpp_msg_t req;
+        rv = recv_entire_check(sockfd, &req, sizeof req, 0);
+        if (!rv) {
+            if (req == MSG_ACCEPT) {
+                rv = resume_negotiated_file(sockfd, fp, filename, filelen, pos);
+            } else if (req == MSG_REJECT) {
+                info("Peer doesn't want to append to an existing file");
+            } else {
+                err("Unexpected request");
+                rv = 1;
+            }
+        }
+    }
+    return rv;
+}
+
+static int handle_push_request(int sockfd, const char *filename,
+                               fpp_off_t filelen)
+{
+    int rv;
+    struct stat sb;
+
+    info("Push request of file %s (%llu bytes)", filename,
+         (unsigned long long)filelen);
+
+    rv = stat(filename, &sb);
+    if (!rv) {
+        if (S_ISREG(sb.st_mode)) {
             if ((fpp_off_t)sb.st_size <= filelen) {
-                ntotal -= sb.st_size;
                 /* b in mode is important for Windows */
-                fp = fopen(filename, "rb+");
-                if (!fp) {
+                FILE *fp = fopen(filename, "rb+");
+                if (fp) {
+                    rv = resume_file(sockfd, fp, filename, filelen, sb.st_size);
+                    fclose(fp);
+                } else {
                     info("Cannot open file %s for writing", filename);
-                    msg_type = MSG_REJECT;
+                    rv = reject_file(sockfd, filename, filelen);
                 }
             } else {
                 info("Local file is bigger (%llu bytes)",
                      (unsigned long long)sb.st_size);
-                msg_type = MSG_REJECT;
+                rv = reject_file(sockfd, filename, filelen);
             }
-        }
-    } else { /* ENOENT */
-        /* b in mode is important for Windows */
-        fp = fopen(filename, "wb");
-        if (!fp) {
-            info("Cannot create file %s", filename);
-            msg_type = MSG_REJECT;
-        }
-    }
-
-    msg = FPP_MSG(msg_type, flags);
-    if (send_entire_check(sockfd, &msg, sizeof msg, 0) != 0)
-        goto fail;
-
-    if (flags & MSG_FLAGS_OFFSET) {
-        fpp_off_t off = hton_offset(sb.st_size);
-        if (send_entire_check(sockfd, &off, sizeof off, 0) != 0)
-            goto fail;
-
-        if (msg_type == MSG_ACCEPT) {
-            SHA1_CTX sha1_tmp_ctx;
-            off_t nleft = sb.st_size;
-
-            info("Calculating SHA1 of local %s...", filename);
-
-            while (nleft > 0 && !terminate) {
-                unsigned char buf[BLOCKSIZE];
-                size_t chunk = (nleft > BLOCKSIZE) ? BLOCKSIZE : nleft;
-                if (fread(buf, 1, chunk, fp) != chunk) {
-                    die("Read error");
-                } else {
-                    SHA1Update(&sha1_ctx, buf, chunk);
-                    nleft -= chunk;
-                }
-            }
-            if (terminate) {
-                // TODO
-            }
-
-            /* POSIX requires a call to a file position function when
-             * switching from reading to writing. Unless this is done
-             * following fwrite will fail on Windows. */
-            fseek(fp, 0L, SEEK_CUR);
-
-            sha1_tmp_ctx = sha1_ctx;
-            SHA1Final((unsigned char *)&digest, &sha1_tmp_ctx);
-            if (send_entire_check(sockfd, &digest, sizeof digest, 0) != 0)
-                goto fail;
-
-            /* At this point peer may found that digests differ
-             * and decide not to push remaining part of the file.
-             * In the latter case it has two options:
-             * - either to close connection if no more files are to be
-             *   sent;
-             * - reply with MSG_REJECT and start pushing next file. */
-            rc = recv_entire(sockfd, &msg, sizeof msg, 0);
-            /* It's ok if peer closes connection at this point */
-            if (rc == 0 || !check_recv(rc) || IS_MSG_TYPE(msg, MSG_REJECT)) {
-                info("Peer abandoned attempt to append %llu bytes to file %s",
-                     (unsigned long long)(filelen - sb.st_size), filename);
-                return 0;
-            }
-
-            /* Otherwise it has to reply with MSG_ACCEPT and start
-             * sending remaining part of the file. */
-            if (!IS_MSG_TYPE(msg, MSG_ACCEPT))
-                return 0;
-        }
-    }
-
-    if (msg_type == MSG_REJECT) {
-        info("Rejected incoming file %s (%llu bytes)", filename, filelen);
-        return 1;
-    }
-
-    nleft = ntotal;
-
-    if (nleft) {
-        if (flags & MSG_FLAGS_OFFSET) {
-            info("Receiving continuation of file %s (%llu bytes)...",
-                 filename, (unsigned long long)nleft);
         } else {
-            info("Receiving file %s (%llu bytes)...",
-                 filename, (unsigned long long)nleft);
+            err("Not a regular file %s", filename);
+            rv = reject_file(sockfd, filename, filelen);
         }
+    } else if (errno == ENOENT) {
+        /* b in mode is important for Windows */
+        FILE *fp = fopen(filename, "wb");
+        if (fp) {
+            rv = accept_file(sockfd, fp, filename, filelen);
+            fclose(fp);
+        } else {
+            err("Cannot create file %s", filename);
+            rv = reject_file(sockfd, filename, filelen);
+        }
+    } else {
+        err("Cannot stat file %s", filename);
+        rv = reject_file(sockfd, filename, filelen);
+    }
+    return rv;
+}
 
-        while (nleft && !terminate) {
-            unsigned char buf[BLOCKSIZE];
-            ssize_t chunk = (nleft > BLOCKSIZE) ? BLOCKSIZE : nleft;
-            ssize_t nreceived = recv(sockfd, (char *)buf, chunk, 0);
-            if (nreceived == -1 && errno == EINTR) {
-                /* try again */;
-            } else if (nreceived <= 0) {
-                if (!nreceived)
-                    err("Peer unexpectedly closed connection");
-                break; /* not terminate = 1; */
-            } else {
-                size_t nwritten = fwrite(buf, 1, nreceived, fp);
-                nleft -= nwritten;
-                if (nwritten != (size_t)nreceived) {
-                    err("Write error");
-                    break; /* not terminate = 1; */
+static int handle_request(int sockfd)
+{
+    fpp_msg_t req;
+    int rv = recv_entire(sockfd, &req, sizeof req, 0);
+    if (rv == ECONNCLOSED) {
+        ; /* It is ok if peer closes connection at this point. */
+    } else if (rv != 0) {
+        check_recv(rv);
+    } else if (req != MSG_PUSH) {
+        err("Unexpected request");
+    } else {
+        uint16_t namelen;
+        rv = recv_entire_check(sockfd, &namelen, sizeof namelen, 0);
+        if (!rv) {
+            char *filename = NULL;
+            namelen = ntohs(namelen);
+            filename = malloc(namelen + 1);
+            if (filename) {
+                rv = recv_entire_check(sockfd, filename, namelen, 0);
+                if (!rv) {
+                    fpp_off_t filelen;
+                    filename[namelen] = '\0';
+                    rv = recv_entire_check(sockfd, &filelen, sizeof filelen, 0);
+                    if (!rv) {
+                        filelen = ntoh_offset(filelen);
+                        sanitize_filename(filename);
+                        rv = handle_push_request(sockfd, filename, filelen);
+                    }
                 }
-                SHA1Update(&sha1_ctx, buf, nwritten);
+                free(filename);
+            } else {
+                rv = 1; /* malloc error */
             }
         }
-
-        if (nleft) {
-            err("Transmission aborted, only %llu of %llu bytes received",
-                (unsigned long long)(ntotal - nleft), (unsigned long long)ntotal);
-        }
     }
-
-    if (!nleft) {
-        SHA1Final((unsigned char *)&digest, &sha1_ctx);
-        if (send_entire_check(sockfd, &digest, sizeof digest, 0) != 0)
-            goto fail;
-
-        if (ntotal)
-            info("Transfer completed");
-    }
-    free(filename);
-    fclose(fp);
-    return !nleft ? 1 : 0;
-
-fail:
-    if (fp)
-        fclose(fp);
-    free(filename);
-    return 0;
+    return rv;
 }
 
 int main(int argc, const char *argv[])
