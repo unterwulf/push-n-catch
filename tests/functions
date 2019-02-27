@@ -1,0 +1,98 @@
+run() {
+	if [ -z "$TEST_SUBSHELL" ]; then
+		setup
+		TEST_SUBSHELL=yes
+		export TEST_SUBSHELL catchdir
+		if sh -e $0; then
+			verdict=passed
+		else
+			verdict=failed
+		fi
+	else
+		[ "$VERBOSE" -lt 2 ] && exec 2>/dev/null 1>&2
+		testcase
+	fi
+}
+
+setup() {
+	me=${0##*/}
+	mydir=$(readlink -e .)
+	catchdir=$mydir/$me.dir
+	: ${VERBOSE=2}
+	export VERBOSE
+	: ${catch_opts=testpeer}
+	verdict=not_run
+
+	atexit cleanup
+	bindir=$(readlink -e ..)
+	for prog in push catch; do
+		test -x $bindir/$prog || exit
+	done
+	PATH=$bindir:$PATH
+
+	mkdir $catchdir || exit
+
+	eventfifo=$catchdir/event.fifo
+	mkfifo $eventfifo || exit
+	exec 5<>$eventfifo || exit
+	rm $eventfifo
+
+	verdict=interrupted
+	cd $catchdir
+	$mydir/supervised_catch $catch_opts &
+	cd $mydir
+	wait_event
+	case $event in
+		catch_ready);;
+		*) exit;;
+	esac
+}
+
+is_fd5_opened() { >&5; } 2>/dev/null
+
+cleanup() {
+	if is_fd5_opened; then
+		# ugly, but dash cannot do $(jobs -p)
+		{ printf "jobs "; jobs -p; } >&5
+		while wait_event; do
+			case $event in
+				jobs)
+					kill $event_args
+					break
+					;;
+			esac
+		done
+		exec 5<&- # flush all pending events
+	fi
+
+	if [ "$VERBOSE" -gt 1 ] && [ -f $catchdir/catch.out ]; then
+		echo "                -- catch output:"
+		while read line; do
+			echo "                $line"
+		done <$catchdir/catch.out
+	fi
+
+	if [ -z "$DONT_CLEANUP" ]; then
+		# Call teardown only if it was declared
+		type teardown >/dev/null && teardown
+		rm -rf $catchdir
+	fi
+
+	[ "$VERBOSE" -gt 0 ] && echo "$me: $verdict"
+	test "$verdict" = passed # for exit status
+}
+
+atexit() {
+	trap "trap - INT QUIT EXIT; $1; kill -s INT $$" INT
+	trap "trap - INT QUIT EXIT; $1; kill -s QUIT $$" QUIT
+	trap "trap - INT QUIT EXIT; $1; exit 1" TERM
+	trap "$1" EXIT
+}
+
+wait_event() {
+	read event event_args <&5
+}
+
+should_fail() {
+	! "$@"
+}

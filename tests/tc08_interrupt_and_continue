@@ -1,0 +1,40 @@
+#!/bin/sh
+
+cd ${0%/*}
+. ./functions
+
+run_till_output() {
+	trigger=$1
+	shift
+	fifo=$catchdir/$1.fifo
+	ret=1
+	mkfifo $fifo
+	"$@" >$fifo 2>&1 &
+	while read line; do
+		echo "$line"
+		case $line in
+			$trigger)
+				sleep 1
+				ret=0
+				kill -s INT $!
+				wait $! || true
+				;;
+		esac
+	done <$fifo
+	rm $fifo
+	return $ret
+}
+
+testcase() {
+	truncate -s 256M verybigfile
+	run_till_output "Sending*" push 127.0.0.1 verybigfile
+	run_till_output "Resume*" push 127.0.0.1 verybigfile
+	push 127.0.0.1 verybigfile
+	diff verybigfile $catchdir/verybigfile
+}
+
+teardown() {
+	rm -f verybigfile
+}
+
+run

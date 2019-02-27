@@ -328,8 +328,6 @@ int main(int argc, const char *argv[])
         myname[sizeof myname - 1] = '\0';
     }
 
-    info("Initialized with peername %s", myname);
-
     tcpfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (tcpfd < 0)
         die_neterr("Cannot create TCP socket");
@@ -350,6 +348,8 @@ int main(int argc, const char *argv[])
 
     if (bind(udpfd, (struct sockaddr *)&sa, sizeof sa) != 0)
         die_neterr("Cannot bind to UDP port %hu", CATCH_PORT);
+
+    info("Initialized with peername %s", myname);
 
     while (!terminate) {
         fd_set rfds;

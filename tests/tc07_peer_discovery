@@ -1,0 +1,14 @@
+#!/bin/sh
+
+cd ${0%/*}
+. ./functions
+
+catch_opts=somepeer
+
+testcase() {
+	cp somefile $catchdir
+	push @somepeer somefile
+	diff somefile $catchdir/somefile
+}
+
+run

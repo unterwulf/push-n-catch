@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# This script runs catch and supervises it.
+#
+# The following events are detected and reported to fd 5
+# (so the caller must provide it):
+# - catch_not_run: something bad had happened even before catch was run
+# - catch_ready: catch ran successfully and is ready to accept connections
+# - catch_exited <rc>: catch exited with exit status <rc>
+#
+
+catchpid=
+signal=
+
+emit_event() {
+	echo "$@" >&5
+}
+
+for sig in INT QUIT TERM; do
+	trap "signal=$sig" $sig
+done
+
+mkfifo catch.fifo || {
+	emit_event catch_not_run
+	exit
+}
+
+while read line; do
+	echo "$line" >>catch.out
+	case $line in
+		Initialized*)
+			emit_event catch_ready
+			;;
+	esac
+done <catch.fifo &
+
+catch "$@" >catch.fifo 2>&1 &
+catchpid=$!
+rm catch.fifo
+
+while :; do
+	wait $catchpid
+	rc=$?
+	if [ $rc -lt 128 ]; then
+		emit_event catch_exited $rc
+		break
+	else
+		# we got signal, propagate it to catch
+		kill -s $signal $catchpid
+	fi
+done
+
+if [ -n "$signal" ]; then
+	trap - $signal
+	kill -s $signal $$
+fi

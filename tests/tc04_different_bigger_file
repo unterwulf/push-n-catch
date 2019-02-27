@@ -1,0 +1,12 @@
+#!/bin/sh
+
+cd ${0%/*}
+. ./functions
+
+testcase() {
+	cp biggerfile $catchdir/somefile
+	should_fail push 127.0.0.1 somefile
+	diff biggerfile $catchdir/somefile
+}
+
+run

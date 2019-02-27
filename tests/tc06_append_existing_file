@@ -1,0 +1,13 @@
+#!/bin/sh
+
+cd ${0%/*}
+. ./functions
+
+testcase() {
+	size=$(stat -c %s somefile)
+	dd if=somefile of=$catchdir/somefile bs=1 count=$((size/4)) status=none
+	push 127.0.0.1 somefile
+	diff somefile $catchdir/somefile
+}
+
+run

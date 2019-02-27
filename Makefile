@@ -21,6 +21,9 @@ deps = $(objs:.o=.d)
 
 all: $(progs)
 
+test: $(progs)
+	tests/run_all
+
 clean:
 	rm -f $(deps) $(objs) $(progs)
 

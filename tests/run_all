@@ -1,0 +1,13 @@
+#!/bin/sh
+
+total=0
+passed=0
+
+cd ${0%/*}
+for tc in ./tc*; do
+	VERBOSE=1 $tc && passed=$((passed+1))
+	total=$((total+1))
+done
+
+echo
+echo "$passed of $total tests passed"
