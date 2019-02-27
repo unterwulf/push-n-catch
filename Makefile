@@ -1,4 +1,7 @@
 src_topdir = $(CURDIR)
+progs =
+objs =
+
 HOST ?= posix
 DEPFLAGS = -MMD -MP
 CFLAGS += $(DEPFLAGS) -Wall -W -I$(src_topdir)
@@ -15,9 +18,9 @@ catch-objs += sha1.o
 
 include $(HOST)/include.mk
 
-progs = push$(exeext) catch$(exeext)
-objs = $(sort $(push-objs) $(catch-objs))
-deps = $(objs:.o=.d)
+progs += push$(exeext) catch$(exeext)
+objs += $(sort $(push-objs) $(catch-objs))
+deps = $(patsubst %.o, %.d, $(filter %.o, $(objs)))
 
 all: $(progs)
 
@@ -32,6 +35,12 @@ push$(exeext): $(push-objs)
 
 catch$(exeext): $(catch-objs)
 	$(CC) $(CFLAGS) $^ $(catch-libs) -o $@
+
+wincatch$(exeext): $(wincatch-objs)
+	$(CC) $(CFLAGS) $^ $(wincatch-libs) -mwindows -o $@
+
+%.res: %.rc
+	$(WINDRES) $< -O coff -o $@
 
 .PHONY: all clean
 
