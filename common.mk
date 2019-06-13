@@ -1,5 +1,5 @@
 DEPFLAGS = -MMD -MP
-CFLAGS += $(DEPFLAGS) -Wall -W -I$(src_topdir)
+CFLAGS += $(DEPFLAGS) -Wall -W -I$(src_topdir)/$(HOST) -I$(src_topdir)
 progs =
 exeext =
 

@@ -9,11 +9,7 @@
 void vneterr(const char *fmt, va_list ap);
 void init_netlib(void);
 
-#ifdef _WIN32
-# include "win32/net_sys.h"
-#else
-# include "posix/net_sys.h"
-#endif
+#include "net_sys.h"
 
 void neterr(const char *fmt, ...);
 void die_neterr(const char *fmt, ...);
