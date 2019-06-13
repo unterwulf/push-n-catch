@@ -15,6 +15,11 @@ run() {
 }
 
 setup() {
+	if [ -z "$HOST" ]; then
+		echo "Environment variable HOST is not set" >&2
+		exit 1
+	fi
+
 	me=${0##*/}
 	mydir=$(readlink -e .)
 	catchdir=$mydir/$me.dir
@@ -24,7 +29,7 @@ setup() {
 	verdict=not_run
 
 	atexit cleanup
-	bindir=$(readlink -e ..)
+	bindir=$(readlink -e ../build/$HOST)
 	for prog in push catch; do
 		test -x $bindir/$prog || exit
 	done

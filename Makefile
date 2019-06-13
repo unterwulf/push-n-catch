@@ -1,47 +1,25 @@
 src_topdir = $(CURDIR)
-progs =
-objs =
 
 HOST ?= posix
-DEPFLAGS = -MMD -MP
-CFLAGS += $(DEPFLAGS) -Wall -W -I$(src_topdir)
+HOSTMAKE = $(MAKE) -f $(src_topdir)/common.mk -C $(builddir)
 
-push-objs  = push.o
-push-objs += common.o
-push-objs += net_common.o
-push-objs += sha1.o
+builddir = build/$(HOST)
 
-catch-objs  = catch.o
-catch-objs += common.o
-catch-objs += net_common.o
-catch-objs += sha1.o
+export src_topdir HOST builddir
 
-include $(HOST)/include.mk
+all:| $(builddir)
+	$(HOSTMAKE) $@
 
-progs += push$(exeext) catch$(exeext)
-objs += $(sort $(push-objs) $(catch-objs))
-deps = $(patsubst %.o, %.d, $(filter %.o, $(objs)))
-
-all: $(progs)
-
-test: $(progs)
-	tests/run_all
+test:
+	tests/run_all $(HOST)
 
 clean:
-	rm -f $(deps) $(objs) $(progs)
+	if test -d $(builddir); then $(HOSTMAKE) clean; fi
 
-push$(exeext): $(push-objs)
-	$(CC) $(CFLAGS) $^ $(push-libs) -o $@
+distclean:
+	$(RM) -r build
 
-catch$(exeext): $(catch-objs)
-	$(CC) $(CFLAGS) $^ $(catch-libs) -o $@
+$(builddir):
+	mkdir -p $@
 
-wincatch$(exeext): $(wincatch-objs)
-	$(CC) $(CFLAGS) $^ $(wincatch-libs) -mwindows -o $@
-
-%.res: %.rc
-	$(WINDRES) $< -O coff -o $@
-
-.PHONY: all clean
-
--include $(deps)
+.PHONY: all clean distclean

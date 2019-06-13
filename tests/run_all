@@ -1,5 +1,18 @@
 #!/bin/sh
 
+if [ $# -ne 1 ]; then
+	echo "usage: $0 posix|win32" >&2
+	exit 1
+fi
+
+case $1 in
+	posix|win32)
+		export HOST=$1;;
+	*)
+		echo "Unsupported platform $1, should be posix or win32" >&2
+		exit 1;;
+esac
+
 total=0
 passed=0
 
