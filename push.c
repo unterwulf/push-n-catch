@@ -15,14 +15,6 @@
 #include "sha1.h"
 #include "sha1util.h"
 
-#if defined(__FreeBSD__) || defined(BSD) || defined(__APPLE__) || defined(__linux__)
-# define USE_GETIFADDRS 1
-# include <ifaddrs.h>
-# include <net/if.h>
-#elif defined(_WIN32)
-# include <iphlpapi.h>
-#endif
-
 #define BLOCKSIZE 512
 
 static void signal_handler(int signum)
@@ -43,74 +35,22 @@ static void xrecv(int sockfd, void *buf, size_t len, int flags)
         exit(EXIT_FAILURE);
 }
 
-static void sendto_all_ifaces(int sockfd, const void *buf, size_t len, int flags)
-{
-    struct sockaddr_in sa;
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(CATCH_PORT);
-
-#if defined(USE_GETIFADDRS)
-    struct ifaddrs *ifap;
-    if (getifaddrs(&ifap) == 0) {
-        struct ifaddrs *p = ifap;
-        for (; p; p = p->ifa_next) {
-            if ((p->ifa_flags & IFF_BROADCAST) && p->ifa_broadaddr
-                && p->ifa_broadaddr->sa_family == AF_INET) {
-                sa.sin_addr = ((struct sockaddr_in *)p->ifa_broadaddr)->sin_addr;
-                info("Send discovery to %s", inet_ntoa(sa.sin_addr));
-                if (sendto(sockfd, buf, len, flags,
-                           (struct sockaddr *)&sa, sizeof sa) != (ssize_t)len)
-                    neterr("sendto");
-            }
-        }
-        freeifaddrs(ifap);
-    }
-#elif defined(_WIN32)
-    // Adapted from example code at http://msdn2.microsoft.com/en-us/library/aa365917.aspx
-    // Now get Windows' IPv4 addresses table.  Once again, we gotta call GetIpAddrTable()
-    // multiple times in order to deal with potential race conditions properly.
-    MIB_IPADDRTABLE *ipTable = NULL;
-    {
-        ULONG bufLen = 0;
-        for (int i = 0; i < 5; i++) {
-            DWORD ipRet = GetIpAddrTable(ipTable, &bufLen, 0);
-            if (ipRet == ERROR_INSUFFICIENT_BUFFER) {
-                free(ipTable);  // in case we had previously allocated it
-                ipTable = malloc(bufLen);
-            } else if (ipRet == NO_ERROR) {
-                break;
-            } else {
-                free(ipTable);
-                ipTable = NULL;
-                break;
-            }
-        }
-    }
-
-    if (ipTable) {
-        for (DWORD i = 0; i < ipTable->dwNumEntries; i++) {
-            const MIB_IPADDRROW *row = &(ipTable->table[i]);
-            uint32_t addr      = ntohl(row->dwAddr);
-            uint32_t netmask   = ntohl(row->dwMask);
-            uint32_t bcastaddr = addr | ~netmask;
-            sa.sin_addr.s_addr = htonl(bcastaddr);
-            info("Send discovery to %s", inet_ntoa(sa.sin_addr));
-            if (sendto(sockfd, buf, len, flags,
-                        (struct sockaddr *)&sa, sizeof sa) != (ssize_t)len)
-                neterr("sendto");
-        }
-
-        free(ipTable);
-    }
-#endif
-}
-
 static int discover_peer(int sockfd, const char *peername, struct in_addr *inp)
 {
     uint8_t req = DISCOVERY_VER;
     uint32_t start_ms = clock_get_monotonic();
+    struct in_addr *bcast_addr = NULL;
+    struct sockaddr_in sa;
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(CATCH_PORT);
 
-    sendto_all_ifaces(sockfd, &req, sizeof req, 0);
+    while ((bcast_addr = iterate_broadcast_addresses(bcast_addr))) {
+        sa.sin_addr = *bcast_addr;
+        info("Send discovery to %s", inet_ntoa(sa.sin_addr));
+        if (sendto(sockfd, (char *)&req, sizeof req, 0,
+                    (struct sockaddr *)&sa, sizeof sa) != sizeof req)
+            neterr("sendto");
+    }
 
     while (!terminate) {
         int retval;

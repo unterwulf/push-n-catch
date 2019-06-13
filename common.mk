@@ -8,6 +8,7 @@ push-objs += common.o
 push-objs += sha1.o
 push-objs += net.o
 push-objs += net_common.o
+push-objs += net_util.o
 push-objs += clock.o
 
 catch-objs  = catch.o

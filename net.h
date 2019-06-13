@@ -1,6 +1,8 @@
 #ifndef NET_H
 #define NET_H
 
+#include "net_sys.h"
+
 #include <stdarg.h>
 #include <errno.h>
 
@@ -8,8 +10,7 @@
 
 void vneterr(const char *fmt, va_list ap);
 void init_netlib(void);
-
-#include "net_sys.h"
+struct in_addr *iterate_broadcast_addresses(struct in_addr *prev);
 
 void neterr(const char *fmt, ...);
 void die_neterr(const char *fmt, ...);
