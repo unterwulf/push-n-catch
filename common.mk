@@ -5,17 +5,15 @@ exeext =
 
 push-objs  = push.o
 push-objs += common.o
+push-objs += libpush.o
+push-objs += platform.o
 push-objs += sha1.o
-push-objs += net.o
-push-objs += net_common.o
-push-objs += net_util.o
-push-objs += clock.o
 
 catch-objs  = catch.o
 catch-objs += common.o
+catch-objs += libcatch.o
+catch-objs += platform.o
 catch-objs += sha1.o
-catch-objs += net.o
-catch-objs += net_common.o
 
 -include $(src_topdir)/$(HOST)/include.mk
 

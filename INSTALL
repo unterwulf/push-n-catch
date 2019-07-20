@@ -1,0 +1,33 @@
+Push-n-Catch has no external dependencies. To build it you just need an
+appropriate C compiler and the make program.
+
+POSIX (Linux/OpenBSD)
+---------------------
+
+    make HOST=posix
+
+Binaries will be placed into build/posix. Install target is also provided.
+Default PREFIX is /usr/local/bin, so you will probably want to override it.
+
+    make HOST=posix PREFIX=/usr/bin install
+
+Win32
+-----
+Currently MinGW32 cross-compiler i686-w64-mingw32-gcc should be used to build
+win32 version. Buiding under Windows is not supported.
+
+    make HOST=win32
+
+Binaries will be placed into build/win32.
+
+DOS16
+-----
+DOS real-mode version is based on WatTCP networking library (included into
+the distribution) and as a result of this Push-n-Catch must be built using
+a Borland compiler (obviously under DOS or Windows). The makefile has Borland
+syntax and only appropriate for Borland make.
+
+    cd dos
+    make
+
+Binaries will be placed into dos.

@@ -6,6 +6,7 @@ exeext := .exe
 push-libs += -lws2_32
 push-libs += -liphlpapi
 
+catch-objs += discover.o
 catch-libs += -lws2_32
 
 progs += wincatch
@@ -13,8 +14,8 @@ progs += wincatch
 wincatch-objs  = wincatch.o
 wincatch-objs += libcatch.o
 wincatch-objs += common.o
-wincatch-objs += net.o
-wincatch-objs += net_common.o
+wincatch-objs += discover.o
+wincatch-objs += platform.o
 wincatch-objs += sha1.o
 wincatch-objs += wincatch.res
 wincatch-libs += -lws2_32

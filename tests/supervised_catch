@@ -39,7 +39,7 @@ while read line; do
 			emit_event catch_ready;;
 		"Transfer completed")
 			emit_event transfer_completed;;
-		"Digests match"*)
+		"Already have this file (digests match)")
 			emit_event digests_match;;
 		"Digests do not match"*)
 			emit_event digests_do_not_match;;

@@ -3,12 +3,14 @@
 #include <shellapi.h>
 #include <stdio.h>
 #include "common.h"
-#include "resource.h"
 #include "libcatch.h"
+#include "resource.h"
 
 #define WM_TRAYICON             (WM_USER+1)
 #define WM_NETTHREAD_TERMINATED (WM_USER+2)
 #define WM_PROGRESS             (WM_USER+3)
+
+extern void handle_discovery(int fd, const char *name);
 
 HWND hWndMain;
 HMENU hTrayMenu;
@@ -57,7 +59,7 @@ void ReadConfig(void)
 
 const char *MyPeerName(void)
 {
-    static char name[PEERNAME_MAX];
+    static char name[PEERNAME_MAX+1];
     DWORD len = sizeof name;
     name[0] = '\0';
 
@@ -305,22 +307,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
    return 0;
 }
 
-void ReportProgress(off_t npassed, off_t ntotal)
+void ReportProgress(const struct catch_context *ctx, int stage)
 {
-    unsigned int percent = (npassed == 0) ? 0 : 100.0*npassed/ntotal;
+    unsigned int percent =
+        (ctx->filepos == 0) ? 0 : 100.0*ctx->filepos/ctx->filelen;
     PostMessage(hWndMain, WM_PROGRESS, percent, 0);
 }
 
-int ConfirmIncomingFile(const char *filename, off_t filelen)
+int ConfirmIncomingFile(const struct catch_context *ctx)
 {
-    strncpy(szCurFilename, filename, sizeof szCurFilename - 1);
+    strncpy(szCurFilename, ctx->filename, sizeof szCurFilename - 1);
     szCurFilename[sizeof szCurFilename - 1] = '\0';
 
     if (!bAcceptWithoutConfirmation) {
         char msg[1024];
         snprintf(msg, sizeof msg,
                  "Do you want to accept file?\n\n  %s\n\nSize: %llu bytes",
-                 filename, (unsigned long long)filelen);
+                 ctx->filename, (unsigned long long)ctx->filelen);
         if (MessageBox(hWndMain, msg, "Incoming push request",
                        MB_YESNO | MB_ICONQUESTION) != IDYES)
             return FALSE;
@@ -357,13 +360,14 @@ void DieNetError(const char *fmt, ...)
 DWORD WINAPI NetThreadProc(LPVOID lpParameter)
 {
     struct sockaddr_in sa;
-    struct libcatch_ctx ctx;
+    struct catch_context ctx;
     SOCKET tcpfd, udpfd;
     UNUSED(lpParameter);
 
-    ctx.report_progress = &ReportProgress;
+    ctx.terminate = 0;
+    ctx.on_progress = &ReportProgress;
     ctx.confirm_file = &ConfirmIncomingFile;
-    ctx.is_termination_requested = &IsTerminationRequested;
+//    ctx.is_termination_requested = &IsTerminationRequested;
 //    MessageBox(hWndMain, "Net thread started", "Debug", MB_OK);
 
     tcpfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -387,7 +391,7 @@ DWORD WINAPI NetThreadProc(LPVOID lpParameter)
     if (bind(udpfd, (struct sockaddr *)&sa, sizeof sa) != 0)
         DieNetError("Cannot bind to UDP port %hu", CATCH_PORT);
 
-    while (!ctx.is_termination_requested()) {
+    while (!*ctx.terminate) {
         fd_set rfds;
         int retval;
 
@@ -402,17 +406,18 @@ DWORD WINAPI NetThreadProc(LPVOID lpParameter)
             DieNetError("select()");
         else if (retval > 0) {
             if (FD_ISSET(udpfd, &rfds)) {
-                libcatch_handle_discovery(udpfd, MyPeerName());
+                handle_discovery(udpfd, MyPeerName());
             } else {
                 struct sockaddr_in sa;
                 int sa_len = sizeof sa;
                 int connfd = accept(tcpfd, (struct sockaddr *)&sa, &sa_len);
                 if (connfd >= 0) {
-                    while (libcatch_handle_request(&ctx, connfd) == 0)
+                    ctx.sk = connfd;
+                    while (libcatch_handle_request(&ctx) == 0)
                         ;
                     closesocket(connfd);
                 } else {
-                    neterr("Cannot accept TCP connection");
+                    //neterr("Cannot accept TCP connection");
                 }
             }
         }
