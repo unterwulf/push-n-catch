@@ -7,7 +7,7 @@ builddir = build/$(HOST)
 
 export src_topdir HOST builddir
 
-all:| $(builddir)
+all install:| $(builddir)
 	$(HOSTMAKE) $@
 
 test:
