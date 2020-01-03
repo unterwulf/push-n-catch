@@ -1,15 +1,17 @@
 run() {
-	if [ -z "$TEST_SUBSHELL" ]; then
-		setup
-		TEST_SUBSHELL=yes
-		export TEST_SUBSHELL catchdir
-		if sh -e $0; then
-			verdict=passed
-		else
-			verdict=failed
-		fi
+	set -e
+	setup
+
+	verdict=failed
+	run_tc
+	verdict=passed
+	exit 0
+}
+
+run_tc() {
+	if [ "$VERBOSE" -lt 2 ]; then
+		testcase 2>/dev/null 1>&2
 	else
-		[ "$VERBOSE" -lt 2 ] && exec 2>/dev/null 1>&2
 		testcase
 	fi
 }
@@ -21,70 +23,59 @@ setup() {
 	fi
 
 	me=${0##*/}
-	mydir=$(readlink -e .)
-	catchdir=$mydir/$me.dir
+	mydir=${0%$me}
+	testhome=$(readlink -f $mydir)
+	catchdir=$(pwd)/$me.catch
 	: ${VERBOSE=2}
-	export VERBOSE
 	: ${catch_opts=testpeer}
 	verdict=not_run
+	exec 6>&1 # save original stdin as fd 6
 
 	atexit cleanup
-	bindir=$(readlink -e ../build/$HOST)
+	bindir=$testhome/../build/$HOST
 	for prog in push catch; do
-		test -x $bindir/$prog || exit
+		test -x $bindir/$prog
 	done
 	PATH=$bindir:$PATH
 
-	mkdir $catchdir || exit
+	mkdir $catchdir
 
 	eventfifo=$catchdir/event.fifo
-	mkfifo $eventfifo || exit
-	exec 5<>$eventfifo || exit
+	mkfifo $eventfifo
+	exec 5<>$eventfifo
 	rm $eventfifo
 
-	verdict=interrupted
 	cd $catchdir
-	$mydir/supervised_catch $catch_opts &
-	cd $mydir
+	verdict=interrupted
+	$testhome/supervised_catch $catch_opts &
+	catchpid=$!
+
+	cd $testhome
 	wait_event
 	case $event in
 		catch_ready);;
-		*) exit;;
+		*) exec 5<&-; exit;;
 	esac
 }
 
-is_fd5_opened() { >&5; } 2>/dev/null
-
 cleanup() {
-	if is_fd5_opened; then
-		# ugly, but dash cannot do $(jobs -p)
-		{ printf "jobs "; jobs -p; } >&5
-		while wait_event; do
-			case $event in
-				jobs)
-					kill $event_args
-					break
-					;;
-			esac
-		done
-		exec 5<&- # flush all pending events
-	fi
+	set +e
+	kill_catch 2>/dev/null || true
 
 	if [ "$VERBOSE" -gt 1 ] && [ -f $catchdir/catch.out ]; then
 		echo "                -- catch output:"
-		while read line; do
+		while read -r line; do
 			echo "                $line"
 		done <$catchdir/catch.out
 	fi
 
 	if [ -z "$DONT_CLEANUP" ]; then
-		# Call teardown only if it was declared
-		type teardown >/dev/null && teardown
+		# Call teardown only if it was declared.
+		type teardown 1>/dev/null 2>&1 && teardown
 		rm -rf $catchdir
 	fi
 
-	[ "$VERBOSE" -gt 0 ] && echo "$me: $verdict"
-	test "$verdict" = passed # for exit status
+	[ "$VERBOSE" -gt 0 ] && echo "$me: $verdict" >&6
 }
 
 atexit() {
@@ -96,6 +87,16 @@ atexit() {
 
 wait_event() {
 	read event event_args <&5
+}
+
+expect_catch() {
+	wait_event
+	test "$event" = "$1"
+}
+
+kill_catch() {
+	kill $catchpid
+	wait $catchpid || true
 }
 
 should_fail() {

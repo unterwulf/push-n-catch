@@ -1,11 +1,14 @@
 #!/bin/sh
 
-cd ${0%/*}
-. ./functions
+. ${0%/*}/functions
 
 testcase() {
 	cp emptyfile $catchdir
 	push 127.0.0.1 emptyfile
+	expect_catch digests_match
+
+	kill_catch # ...to make sure the file is actually written to disk
+	           # if catch mistakenly decides to alter it.
 	diff emptyfile $catchdir/emptyfile
 }
 

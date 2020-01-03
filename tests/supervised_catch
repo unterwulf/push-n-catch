@@ -10,45 +10,63 @@
 #
 
 catchpid=
+loggerpid=
 signal=
 
 emit_event() {
 	echo "$@" >&5
 }
 
+silent_kill() {
+	kill "$@" 2>/dev/null
+}
+
 for sig in INT QUIT TERM; do
-	trap "signal=$sig" $sig
+	trap "pending_signal=$sig" $sig
 done
 
 mkfifo catch.fifo || {
 	emit_event catch_not_run
 	exit
 }
+exec 6<>catch.fifo
+rm catch.fifo
 
 while read line; do
 	echo "$line" >>catch.out
 	case $line in
 		Initialized*)
-			emit_event catch_ready
-			;;
+			emit_event catch_ready;;
+		"Transfer completed")
+			emit_event transfer_completed;;
+		"Digests match"*)
+			emit_event digests_match;;
+		"Digests do not match"*)
+			emit_event digests_do_not_match;;
+		"Rejected file"*)
+			emit_event rejected;;
 	esac
-done <catch.fifo &
+done <&6 &
+loggerpid=$!
 
-catch "$@" >catch.fifo 2>&1 &
+catch "$@" >&6 2>&1 &
 catchpid=$!
-rm catch.fifo
 
 while :; do
 	wait $catchpid
 	rc=$?
-	if [ $rc -lt 128 ]; then
+	if [ -n "$pending_signal" ]; then
+		# Received a signal, terminate catch.
+		silent_kill $catchpid
+		signal=$pending_signal
+		pending_signal=
+	else
 		emit_event catch_exited $rc
 		break
-	else
-		# we got signal, propagate it to catch
-		kill -s $signal $catchpid
 	fi
 done
+
+silent_kill $loggerpid
 
 if [ -n "$signal" ]; then
 	trap - $signal

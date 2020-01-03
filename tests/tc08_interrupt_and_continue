@@ -1,7 +1,6 @@
 #!/bin/sh
 
-cd ${0%/*}
-. ./functions
+. ${0%/*}/functions
 
 run_till_output() {
 	trigger=$1
@@ -26,10 +25,20 @@ run_till_output() {
 }
 
 testcase() {
-	truncate -s 256M verybigfile
+	dd if=/dev/null of=verybigfile seek=256 bs=1M count=0 2>/dev/null
 	run_till_output "Sending*" push 127.0.0.1 verybigfile
+
+	# Use actual size of data transferred during the first attempt to tune
+	# the total size, so that the test will adapt to the system and will
+	# not take too much time.
+	size=$(wc -c <$catchdir/verybigfile)
+	dd if=/dev/null of=verybigfile seek=$((3*size/1024)) bs=1K count=0 2>/dev/null
+
 	run_till_output "Resume*" push 127.0.0.1 verybigfile
 	push 127.0.0.1 verybigfile
+	expect_catch transfer_completed
+
+	kill_catch # ...to make sure the file is actually written to disk.
 	diff verybigfile $catchdir/verybigfile
 }
 

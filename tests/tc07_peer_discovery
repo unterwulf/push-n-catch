@@ -1,13 +1,16 @@
 #!/bin/sh
 
-cd ${0%/*}
-. ./functions
+. ${0%/*}/functions
 
 catch_opts=somepeer
 
 testcase() {
 	cp somefile $catchdir
 	push @somepeer somefile
+	expect_catch digests_match
+
+	kill_catch # ...to make sure the file is actually written to disk
+	           # if catch mistakenly decides to alter it.
 	diff somefile $catchdir/somefile
 }
 

@@ -1,11 +1,14 @@
 #!/bin/sh
 
-cd ${0%/*}
-. ./functions
+. ${0%/*}/functions
 
 testcase() {
 	cp biggerfile $catchdir/somefile
 	should_fail push 127.0.0.1 somefile
+	expect_catch rejected
+
+	kill_catch # ...to make sure the file is actually written to disk
+	           # if catch mistakenly decides to alter it.
 	diff biggerfile $catchdir/somefile
 }
 
