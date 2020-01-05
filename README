@@ -1,0 +1,73 @@
+Push-n-Catch
+------------
+
+Push-n-Catch is a small simple program for zero-configuration file transfer
+over IP networks. It is meant to be a virtual replacement for a flashdrive
+(or a floppy disk) in a scenario when two systems are connected to the same
+IP network, but have no common way to talk to each other over the network
+due to difference of platforms or administrative limitations.
+
+All well-known approaches for transferring files over the network like NFS,
+SMB, FTP, rsync and scp are client-server in their nature and involve
+server-side configuration, which may be considered an unnecessary waste of
+time on one-time occasions and also often requires elevated user privileges
+on the system.
+
+Another option, cloud services, requires access to the Internet, which is
+overkill and just hilarious for such a simple task. Moreover, cloud services
+tend not to support outdated systems. Please report if you are aware of any
+cloud service that would provide a client for DOS or Win9x.
+
+By addressing the following issues Push-n-Catch tries to fulfill a niche
+where all the aforementioned tools are inconvenient:
+
+1. Necessity of pre-configuration
+
+   To catch a file you just do not need to do anything but running the catch
+   program. Optionally, you can specify a peername that will be announced in
+   replies to broadcast peer discovery, but it is not usually necessary.
+   If the system has a hostname configured, the hostname will be used as the
+   peername, otherwise a hardcoded default peername will be taken.
+
+   Clash of hardcoded peernames is not considered a problem since in the
+   simplest (and most typical) use case catch processes are short-lived.
+   Should you need to run catch as a permanent daemon you had better configure
+   hostname of the system or pick a unique peername (which is not a big deal
+   of configuration work though).
+
+2. Dependency upon other network services (but probably DHCP)
+
+   Let alone access to the Internet, which is obviously unnecessary here, you
+   do not even need a working DNS service in your network since Push-n-Catch
+   is capable of discovering peers in the same L2 network using UDP broadcasts.
+   (Direct IP addressing and domain names are also supported of course.)
+
+3. Poor support over wide range of platforms
+
+   Since at the moment Push-n-Catch is a one-man effort it has not a really
+   wide range of supported platforms, but the protocol itself is so primitive
+   (just a little bit more complicated than netcat) that it should not
+   be a problem to implement it for any platform in a span of day or two
+   (providing that the developer is familiar with the networking API of the
+   platform).
+
+Limitations
+-----------
+To be able to address virtually any platform File Push Protocol (FPP), which
+Push-n-Catch is using under the hood, intentionally takes a number of severe
+limitations:
+
+*  All transfers are performed in plaintext (not encrypted) as otherwise the
+   protocol would have to be much more complicated and resource-consuming that
+   would render it inappropriate for both outdated and low-performance systems.
+*  Paths are not supported. All caught files are end up in the same directory.
+*  Because the protocol assumes there is a person on each side of transfer
+   it does not care about protection from being abused if unattended. In
+   general, the simplicity is preferred over security in FPP, so you should
+   NEVER use Push-n-Catch for transferring sensitive data.
+
+Supported platforms
+-------------------
+*  Linux
+*  Win32 (Windows 98 and newer)
+*  DOS (real mode, known to work on MS-DOS 2.0)
