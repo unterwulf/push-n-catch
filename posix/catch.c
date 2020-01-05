@@ -43,15 +43,17 @@ static void on_stage_change(const struct catch_context *ctx, int stage)
              (unsigned long long)ctx->filelen);
         break;
     case CATCH_RECEIVE:
-        info("Receiving file %s (%llu bytes)...",
-             ctx->filename, (unsigned long long)ctx->filelen);
+        if (!ctx->fileoff) {
+            info("Receiving file %s (%llu bytes)...",
+                 ctx->filename, (unsigned long long)ctx->filelen);
+        } else {
+            info("Receiving continuation of file %s (%lu bytes)...",
+                 ctx->filename,
+                 (unsigned long long)(ctx->filelen - ctx->fileoff));
+        }
         break;
     case CATCH_SHA1_CALC:
         info("Calculating SHA1 of local %s...", ctx->filename);
-        break;
-    case CATCH_RESUME:
-        info("Receiving continuation of file %s (%llu bytes)...",
-             ctx->filename, (unsigned long long)(ctx->filelen - ctx->filepos));
         break;
     }
 }
@@ -80,15 +82,13 @@ static int handle_connection(int sockfd)
             break;
         case RV_COMPLETED_DIGEST_MISMATCH:
             err("Transfer completed (digests do NOT match)");
+        case RV_OFFSET:
             break;
         case RV_DIGEST_MATCH:
             info("Already have this file (digests match)");
             break;
         case RV_SIZE_MATCH:
             info("Already have this file (same size, digests not verified)");
-            break;
-        case RV_REJECT:
-            info("Peer does not want to append to an existing file");
             break;
         case RV_LOCAL_BIGGER:
             info("Rejected file %s (%llu bytes), local version is bigger",

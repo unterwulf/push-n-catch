@@ -9,6 +9,7 @@ struct catch_context {
     char *filename;    /* application-provided buffer */
     size_t filenamesz; /* and its size */
     FILE *fp;
+    off_t fileoff;
     off_t filepos;
     off_t filelen;
     Sock sk;
@@ -22,7 +23,6 @@ struct catch_context {
 enum catch_stage {
     CATCH_NEXT_FILE,
     CATCH_RECEIVE,
-    CATCH_RESUME,
     CATCH_SHA1_CALC
 };
 

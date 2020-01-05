@@ -47,6 +47,7 @@ fpp_off_t swap_offset(fpp_off_t off);
 #define RV_DIGEST_MATCH 16
 #define RV_SIZE_MATCH 17
 #define RV_COMPLETED_DIGEST_MISMATCH 18
+#define RV_OFFSET 19
 
 static inline int send_short_msg(Sock sk, fpp_msg_t msg)
 {

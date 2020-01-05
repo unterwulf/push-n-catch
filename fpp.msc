@@ -4,48 +4,42 @@ participant push
 note left of push
 Pusher wants to push
 a file FILENAME of
-length LENGTH.
+length LENGTH
+from offset OFFSET.
 end note
 
-push->catch: MSG_PUSH(FILENAME, LENGTH)
+push->catch: MSG_PUSH(FILENAME, OFFSET, LENGTH)
 
-alt Catcher refuses to receive FILENAME, most likely because it already has a bigger file with the same name
+alt Catcher refuses to receive the file, most likely because it already has a bigger file with the same name
     catch->push: MSG_REJECT
-else Catcher agrees to receive FILENAME, most likely because it doesn't have a file with the name FILENAME
+else Catcher refuses to receive the file, but agrees to receive its continuation [CATCHER_LENGTH; LENGTH), most likely because it already has a file with the same name and its length CATCHER_LENGTH is smaller or equal to LENGTH
+    catch->push: MSG_REJECT_OFFSET(CATCHER_LENGTH)
+else OFFSET = 0 and LENGTH = 0 and Catcher already has an empty file with the same name
+    catch->push: MSG_ACK
+else Catcher agrees to receive the file, most likely because it does not have a file with the name FILENAME or has such file with length OFFSET
     catch->push: MSG_ACCEPT
-    push->catch: content(FILENAME)
-    push->catch: digest(content(FILENAME))
-    alt Digests do not match
-        catch->push: MSG_NACK
-    else Digests match
-        catch->push: MSG_ACK
-    end
-else Catcher agrees to receive continuation of FILENAME from offset CATCHER_LENGTH, most likely because it already has a file with the same name and its length CATCHER_LENGTH is smaller or equal to LENGTH (if CATCHER_LENGTH equals LENGTH this sequence will let Pusher ensure that FILENAME has identical content on both sides)
-    catch->push: MSG_RESUME(CATCHER_LENGTH)
-    alt Pusher refuses to resume pushing to an existing file
-        push->catch: MSG_REJECT
-    else Pusher agrees to resume pushing to an existing file from offset CATCHER_LENGTH
-        push->catch: MSG_ACCEPT
+
+    opt OFFSET > 0, If OFFSET equals LENGTH this sequence will let Pusher ensure the file has identical content on both sides
 
 note over push, catch
-Both sides calculate digests of [1; CATCHER_LENGTH] of content(FILENAME)
+Both sides calculate digests of [0; OFFSET) of content(FILENAME)
 end note
 
-        push->catch: digest([1; CATCHER_LENGTH] of content(FILENAME))
+        push->catch: digest([0; OFFSET)) of content(FILENAME))
 
         alt Digests do not match
             catch->push: MSG_NACK
         else Digests match
             catch->push: MSG_ACK
-            opt LENGTH > CATCHER_LENGTH
-                push->catch: (CATCHER_LENGTH; LENGTH] of content(FILENAME)
-                push->catch: digest(content(FILENAME))
-                alt Digests do not match
-                    catch->push: MSG_NACK
-                else Digests match
-                    catch->push: MSG_ACK
-                end
-            end
+        end
+    end
+    opt LENGTH > OFFSET and digest([0; OFFSET)) is the same on both sides
+        push->catch: [OFFSET; LENGTH) of content(FILENAME)
+        push->catch: digest(content(FILENAME))
+        alt Digests do not match
+            catch->push: MSG_NACK
+        else Digests match
+            catch->push: MSG_ACK
         end
     end
 end

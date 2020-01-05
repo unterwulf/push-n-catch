@@ -239,6 +239,7 @@ static int push_file(int sockfd, const char *pathname)
     ctx.sk = sockfd;
     ctx.filename = basename(pathname);
     ctx.filelen = get_filelen_or_die(pathname);
+    ctx.fileoff = 0;
     ctx.calc_digest = 1;
     ctx.on_stage_change = on_stage_change;
     ctx.fp = fopen(pathname, "rb"); /* b in mode is important for Windows */

@@ -54,120 +54,98 @@ static int receive_chunk(struct catch_context *ctx, SHA1_CTX *sha1_ctx)
     return rv;
 }
 
-static int reject_file(struct catch_context *ctx)
-{
-    return send_short_msg(ctx->sk, MSG_REJECT);
-}
-
 static int accept_file(struct catch_context *ctx)
-{
-    int rv = send_short_msg(ctx->sk, MSG_ACCEPT);
-    if (!rv) {
-        SHA1_CTX sha1_ctx;
-        SHA1Init(&sha1_ctx);
-
-        if (ctx->on_stage_change)
-            ctx->on_stage_change(ctx, CATCH_RECEIVE);
-
-        rv = receive_chunk(ctx, &sha1_ctx);
-    }
-    return rv;
-}
-
-static int resume_negotiated_file(struct catch_context *ctx)
 {
     int rv;
     struct sha1 peer_digest;
     SHA1_CTX sha1_ctx;
     SHA1Init(&sha1_ctx);
 
-    if (ctx->calc_digest) {
-        off_t nleft = ctx->filepos;
+    rv = send_short_msg(ctx->sk, MSG_ACCEPT);
+    if (rv)
+        return rv;
 
-        if (ctx->on_stage_change)
-            ctx->on_stage_change(ctx, CATCH_SHA1_CALC);
+    ctx->filepos = 0;
 
-        ctx->filepos = 0;
+    if (ctx->fileoff) {
+        if (ctx->calc_digest) {
+            off_t nleft = ctx->fileoff;
 
-        while (nleft > 0) {
-            unsigned char buf[BLOCKSIZE];
-            size_t chunk = (nleft > BLOCKSIZE) ? BLOCKSIZE : nleft;
+            if (ctx->on_stage_change)
+                ctx->on_stage_change(ctx, CATCH_SHA1_CALC);
 
-            if (fread(buf, 1, chunk, ctx->fp) != chunk)
-                return RV_IOERROR;
+            while (nleft > 0) {
+                unsigned char buf[BLOCKSIZE];
+                size_t chunk = (nleft > BLOCKSIZE) ? BLOCKSIZE : nleft;
 
-            SHA1Update(&sha1_ctx, buf, chunk);
-            nleft -= chunk;
-            ctx->filepos += chunk;
+                if (fread(buf, 1, chunk, ctx->fp) != chunk)
+                    return RV_IOERROR;
 
-            if (ctx->on_progress)
-                ctx->on_progress(ctx, CATCH_SHA1_CALC);
+                SHA1Update(&sha1_ctx, buf, chunk);
+                nleft -= chunk;
+                ctx->filepos += chunk;
 
-            if (*ctx->terminate)
-                return RV_TERMINATED;
-        }
-    }
+                if (ctx->on_progress)
+                    ctx->on_progress(ctx, CATCH_SHA1_CALC);
 
-    rv = recv_entire(ctx->sk, &peer_digest, sizeof peer_digest);
-
-    if (!rv) {
-        SHA1_CTX sha1_tmp_ctx = sha1_ctx;
-        struct sha1 digest;
-        SHA1Final((unsigned char *)&digest, &sha1_tmp_ctx);
-
-        if (ctx->calc_digest && memcmp(&digest, &peer_digest, sizeof digest)) {
-            rv = send_short_msg(ctx->sk, MSG_NACK);
-            if (!rv)
-                rv = RV_NACK;
+                if (*ctx->terminate)
+                    return RV_TERMINATED;
+            }
         } else {
-            rv = send_short_msg(ctx->sk, MSG_ACK);
-            if (!rv) {
-                off_t chunklen = ctx->filelen - ctx->filepos;
-                if (chunklen > 0) {
-                    if (ctx->on_stage_change)
-                        ctx->on_stage_change(ctx, CATCH_RESUME);
+            ctx->filepos = ctx->fileoff;
+        }
 
-                    /* C standard requires a call to a file position
-                     * function when switching from reading to writing.
-                     * Unless this is done, the following fwrite call
-                     * fails at least on Windows. */
-                    fseek(ctx->fp, 0L, SEEK_CUR);
+        rv = recv_entire(ctx->sk, &peer_digest, sizeof peer_digest);
+        if (rv)
+            return rv;
 
-                    rv = receive_chunk(ctx, &sha1_ctx);
-                } else {
-                    rv = (ctx->calc_digest) ? RV_DIGEST_MATCH : RV_SIZE_MATCH;
-                }
+        if (ctx->calc_digest) {
+            SHA1_CTX sha1_tmp_ctx = sha1_ctx;
+            struct sha1 digest;
+            SHA1Final((unsigned char *)&digest, &sha1_tmp_ctx);
+
+            if (memcmp(&digest, &peer_digest, sizeof digest)) {
+                rv = send_short_msg(ctx->sk, MSG_NACK);
+                return (rv) ? rv : RV_NACK;
             }
         }
+
+        rv = send_short_msg(ctx->sk, MSG_ACK);
+        if (rv)
+            return rv;
+    }
+
+    if (!ctx->filelen || ctx->filepos < ctx->filelen) {
+        if (ctx->on_stage_change)
+            ctx->on_stage_change(ctx, CATCH_RECEIVE);
+
+        /* C standard requires a call to a file position function when
+         * switching from reading to writing. Unless this is done, the
+         * following fwrite call fails at least on Windows. */
+        fseek(ctx->fp, 0L, SEEK_CUR);
+
+        rv = receive_chunk(ctx, &sha1_ctx);
+    } else {
+        rv = (ctx->calc_digest) ? RV_DIGEST_MATCH : RV_SIZE_MATCH;
     }
 
     return rv;
 }
 
-static int resume_file(struct catch_context *ctx)
+static int reject_file(struct catch_context *ctx)
 {
-    int rv = 0;
-    fpp_msg_t msg = MSG_RESUME;
-    fpp_off_t off = hton_offset(to_fpp_off(ctx->filepos));
+    return send_short_msg(ctx->sk, MSG_REJECT);
+}
+
+static int reject_file_offset(struct catch_context *ctx, off_t offset)
+{
+    fpp_msg_t msg = MSG_REJECT_OFFSET;
+    fpp_off_t off = hton_offset(to_fpp_off(offset));
     char buf[sizeof msg + sizeof off];
     memcpy(buf, &msg, sizeof msg);
     memcpy(buf + sizeof msg, &off, sizeof off);
 
-    rv = send_entire(ctx->sk, buf, sizeof buf);
-    if (!rv) {
-        fpp_msg_t req;
-        rv = recv_entire(ctx->sk, &req, sizeof req);
-        if (!rv) {
-            if (req == MSG_ACCEPT) {
-                rv = resume_negotiated_file(ctx);
-            } else if (req == MSG_REJECT) {
-                rv = RV_REJECT;
-            } else {
-                rv = RV_UNEXPECTED;
-            }
-        }
-    }
-    return rv;
+    return send_entire(ctx->sk, buf, sizeof buf);
 }
 
 static int handle_push_request(struct catch_context *ctx)
@@ -176,6 +154,7 @@ static int handle_push_request(struct catch_context *ctx)
     uint16_t namelen;
     fpp_off_t fpp_off;
     off_t filelen;
+    int new_file = 1;
 
     rv = recv_entire(ctx->sk, &namelen, sizeof namelen);
     if (rv)
@@ -196,6 +175,17 @@ static int handle_push_request(struct catch_context *ctx)
     if (rv)
         return rv;
 
+    ctx->fileoff = to_off(ntoh_offset(fpp_off));
+
+    if (ctx->fileoff == -1) {
+        rv = reject_file(ctx);
+        return (rv) ? rv : RV_TOOBIG;
+    }
+
+    rv = recv_entire(ctx->sk, &fpp_off, sizeof fpp_off);
+    if (rv)
+        return rv;
+
     ctx->filelen = to_off(ntoh_offset(fpp_off));
 
     if (ctx->filelen == -1) {
@@ -203,45 +193,48 @@ static int handle_push_request(struct catch_context *ctx)
         return (rv) ? rv : RV_TOOBIG;
     }
 
-    if (ctx->on_stage_change)
-        ctx->on_stage_change(ctx, CATCH_NEXT_FILE);
+    if (ctx->fileoff > ctx->filelen) {
+        rv = reject_file(ctx);
+        return (rv) ? rv : RV_UNEXPECTED;
+    }
 
     rv = get_filelen(ctx->filename, &filelen);
     if (rv == RV_NOENT) {
-        /* b in mode is important for Windows. */
-        ctx->fp = fopen(ctx->filename, "wb");
-        if (ctx->fp) {
-            ctx->filepos = 0;
-            rv = accept_file(ctx);
-            fclose(ctx->fp);
-        } else {
-            rv = reject_file(ctx);
-            if (!rv)
-                rv = RV_IOERROR;
+        if (ctx->fileoff) {
+            rv = reject_file_offset(ctx, 0);
+            return (rv) ? rv : RV_OFFSET;
         }
     } else if (rv == 0) {
-        if (filelen <= ctx->filelen) {
-            /* b in mode is important for Windows. */
-            ctx->fp = fopen(ctx->filename, "rb+");
-            if (ctx->fp) {
-                ctx->filepos = filelen;
-                rv = resume_file(ctx);
-                fclose(ctx->fp);
-            } else {
-                rv = reject_file(ctx);
-                if (!rv)
-                    rv = RV_IOERROR;
-            }
-        } else {
+        if (filelen == 0 && ctx->fileoff == 0 && ctx->filelen == 0) {
+            rv = send_short_msg(ctx->sk, MSG_ACK);
+            return (rv) ? rv : RV_DIGEST_MATCH;
+        } else if (filelen > ctx->filelen) {
             rv = reject_file(ctx);
-            if (!rv)
-                rv = RV_LOCAL_BIGGER;
+            return (rv) ? rv : RV_LOCAL_BIGGER;
+        } else if (filelen != ctx->fileoff) {
+            rv = reject_file_offset(ctx, filelen);
+            return (rv) ? rv : RV_OFFSET;
         }
+        new_file = 0;
     } else {
         int rv2 = reject_file(ctx);
-        if (rv2)
-            rv = rv2;
+        return (rv2) ? rv2 : rv;
     }
+
+    if (ctx->on_stage_change)
+        ctx->on_stage_change(ctx, CATCH_NEXT_FILE);
+
+    /* b in mode is important for Windows. */
+    ctx->fp = fopen(ctx->filename, new_file ? "wb" : "rb+");
+    if (ctx->fp) {
+        rv = accept_file(ctx);
+        fclose(ctx->fp);
+    } else {
+        rv = reject_file(ctx);
+        if (!rv)
+            rv = RV_IOERROR;
+    }
+
     return rv;
 }
 
