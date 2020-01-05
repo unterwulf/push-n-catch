@@ -1,0 +1,15 @@
+#!/bin/sh
+
+. ${0%/*}/functions
+
+catch_opts=-f
+
+testcase() {
+	push -f 127.0.0.1 emptyfile
+	expect_catch transfer_completed
+
+	kill_catch # ...to make sure the file is actually written to disk.
+	diff emptyfile $catchdir/emptyfile
+}
+
+run

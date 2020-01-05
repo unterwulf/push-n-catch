@@ -19,6 +19,9 @@ extern unsigned _stklen = 8192;
  * by default. */
 int use_digests = 0;
 
+/* Use forced push in the push mode, allow forced pushes in the catch mode. */
+int use_force = 0;
+
 tcp_Socket tcp_sk;
 udp_Socket udp_sk;
 char udp_skbuf[UDP_BACKLOG_SIZE];
@@ -96,8 +99,8 @@ void usage(void)
 {
     puts("Push-n-Catch v0.1 Copyright 2019 Vitaly Sinilin");
     puts("Transfers files between hosts in heterogenous IP network.\n");
-    puts("Usage: to push:  push [/d] [@]peername files...");
-    puts("       to catch: push /c [/d] [myname]\n");
+    puts("Usage: to push:  push [/d] [/f] [@]peername files...");
+    puts("       to catch: push /c [/d] [/f] [myname]\n");
     puts("The optional at sign (@) in front of peername in the push mode");
     puts("can be used to force broadcast peer discovery avoiding use of");
     puts("DNS resolver.\n");
@@ -125,6 +128,7 @@ int main(int argc, const char *argv[])
             case 'h': usage(); break;
             case 'c': catch_mode = 1; break;
             case 'd': use_digests = 1; break;
+            case 'f': use_force = 1; break;
             default: die("Unknown option %s", argv[1]);
         }
         argv++;

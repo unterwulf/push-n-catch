@@ -5,6 +5,7 @@
 
 #define UDP_BACKLOG_SIZE 4096
 
+extern int use_force;
 extern int use_digests;
 extern tcp_Socket tcp_sk;
 extern udp_Socket udp_sk;

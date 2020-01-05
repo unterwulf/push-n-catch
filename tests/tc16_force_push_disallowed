@@ -1,0 +1,15 @@
+#!/bin/sh
+
+. ${0%/*}/functions
+
+testcase() {
+	cp otherfile $catchdir/somefile
+	should_fail push -f 127.0.0.1 somefile
+	expect_catch rejected_force_push
+
+	kill_catch # ...to make sure the file is actually written to disk
+	           # if catch mistakenly decides to alter it.
+	diff otherfile $catchdir/somefile
+}
+
+run

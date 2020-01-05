@@ -1,0 +1,35 @@
+title File push protocol\nForced push
+participant push
+
+note left of push
+Pusher wants to push
+a file FILENAME of
+length LENGTH so that
+if a file with the same
+name already exists, it
+should be completely
+overwriten by the pushed
+version.
+end note
+
+push->catch: MSG_FORCED_PUSH(FILENAME, LENGTH)
+
+alt Catcher refuses to receive the file, most likely because it already has a file with the same name and does not accept forced pushes
+    catch->push: MSG_REJECT
+else Catcher agrees to receive the file, because either it does not have a file with the name FILENAME or it accepts forced pushes
+    catch->push: MSG_ACCEPT
+    push->catch: content(FILENAME)
+    push->catch: digest(content(FILENAME))
+    alt Digests do not match
+        catch->push: MSG_NACK
+    else Digests match
+        catch->push: MSG_ACK
+    end
+end
+
+note left of push
+Pusher can either
+close the connection
+at this point or start
+pushing next file.
+end note

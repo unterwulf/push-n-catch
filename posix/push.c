@@ -14,6 +14,8 @@
 #include "common.h"
 #include "libpush.h"
 
+static int forced = 0;
+
 static void signal_handler(int signum)
 {
     UNUSED(signum);
@@ -238,6 +240,7 @@ static int push_file(int sockfd, const char *pathname)
     ctx.filelen = get_filelen_or_die(pathname);
     ctx.fileoff = 0;
     ctx.calc_digest = 1;
+    ctx.forced = forced;
     ctx.on_stage_change = on_stage_change;
     ctx.fp = fopen(pathname, "r");
     if (!ctx.fp)
@@ -291,8 +294,14 @@ int main(int argc, const char *argv[])
     int sockfd;
     struct sockaddr_in sa;
 
+    if (argc > 1 && !strcmp(argv[1], "-f")) {
+        forced = 1;
+        argc--;
+        argv++;
+    }
+
     if (argc < 3) {
-        puts("usage: push [@]peername files...\n");
+        puts("usage: push [-f] [@]peername files...\n");
         puts("The optional at sign (@) in front of peername can be used");
         puts("to force broadcast peer discovery avoiding use of DNS resolver.\n");
         puts("BEWARE! This program pushes files carelessly and absolutely");

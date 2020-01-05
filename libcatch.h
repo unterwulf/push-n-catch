@@ -14,6 +14,8 @@ struct catch_context {
     off_t filelen;
     Sock sk;
     int calc_digest;
+    int allow_forced;
+    int forced;
     volatile sig_atomic_t *terminate;
     void (*on_stage_change)(const struct catch_context *ctx, int stage);
     void (*on_progress)(const struct catch_context *ctx, int stage);

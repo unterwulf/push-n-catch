@@ -13,6 +13,7 @@
 #include "libcatch.h"
 
 static char myname[PEERNAME_MAX+1];
+static int allow_forced;
 
 static void signal_handler(int signum)
 {
@@ -39,8 +40,13 @@ static void on_stage_change(const struct catch_context *ctx, int stage)
 {
     switch (stage) {
     case CATCH_NEXT_FILE:
-        info("Push request of file %s (%llu bytes)", ctx->filename,
-             (unsigned long long)ctx->filelen);
+        if (ctx->forced) {
+            info("Forced push request of file %s (%llu bytes)", ctx->filename,
+                 (unsigned long long)ctx->filelen);
+        } else {
+            info("Push request of file %s (%llu bytes)", ctx->filename,
+                 (unsigned long long)ctx->filelen);
+        }
         break;
     case CATCH_RECEIVE:
         if (!ctx->fileoff) {
@@ -72,6 +78,7 @@ static int handle_connection(int sockfd)
     ctx.filename = filename;
     ctx.filenamesz = sizeof filename;
     ctx.calc_digest = 1;
+    ctx.allow_forced = allow_forced;
 
     while (!close_connection) {
         rv = libcatch_handle_request(&ctx);
@@ -89,6 +96,10 @@ static int handle_connection(int sockfd)
             break;
         case RV_SIZE_MATCH:
             info("Already have this file (same size, digests not verified)");
+            break;
+        case RV_REJECT:
+            info("Rejected forced push of file %s (%llu bytes)",
+                 ctx.filename, (unsigned long long)ctx.filelen);
             break;
         case RV_LOCAL_BIGGER:
             info("Rejected file %s (%llu bytes), local version is bigger",
@@ -139,6 +150,12 @@ int main(int argc, const char *argv[])
     sigact.sa_handler = signal_handler;
     sigaction(SIGINT, &sigact, NULL);
     sigaction(SIGTERM, &sigact, NULL);
+
+    if (argc > 1 && !strcmp(argv[1], "-f")) {
+        allow_forced = 1;
+        argc--;
+        argv++;
+    }
 
     if (argc == 2) {
         size_t namelen = strlen(argv[1]);

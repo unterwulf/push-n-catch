@@ -45,6 +45,8 @@ while read line; do
 			emit_event digests_do_not_match;;
 		"Rejected file"*)
 			emit_event rejected;;
+		"Rejected forced push"*)
+			emit_event rejected_force_push;;
 	esac
 done <&6 &
 loggerpid=$!

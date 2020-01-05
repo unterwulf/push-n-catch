@@ -122,6 +122,7 @@ static int push_file(tcp_Socket *sk, const char *pathname)
     ctx.filelen = get_filelen_or_die(pathname);
     ctx.fileoff = 0;
     ctx.calc_digest = use_digests;
+    ctx.forced = use_force;
     ctx.on_stage_change = on_stage_change;
     ctx.fp = fopen(pathname, "rb"); /* b in mode is important for DOS */
     if (!ctx.fp)

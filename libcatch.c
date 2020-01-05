@@ -171,15 +171,19 @@ static int handle_push_request(struct catch_context *ctx)
     ctx->filename[namelen] = '\0';
     sanitize_filename(ctx->filename);
 
-    rv = recv_entire(ctx->sk, &fpp_off, sizeof fpp_off);
-    if (rv)
-        return rv;
+    if (!ctx->forced) {
+        rv = recv_entire(ctx->sk, &fpp_off, sizeof fpp_off);
+        if (rv)
+            return rv;
 
-    ctx->fileoff = to_off(ntoh_offset(fpp_off));
+        ctx->fileoff = to_off(ntoh_offset(fpp_off));
 
-    if (ctx->fileoff == -1) {
-        rv = reject_file(ctx);
-        return (rv) ? rv : RV_TOOBIG;
+        if (ctx->fileoff == -1) {
+            rv = reject_file(ctx);
+            return (rv) ? rv : RV_TOOBIG;
+        }
+    } else {
+        ctx->fileoff = 0;
     }
 
     rv = recv_entire(ctx->sk, &fpp_off, sizeof fpp_off);
@@ -198,6 +202,11 @@ static int handle_push_request(struct catch_context *ctx)
         return (rv) ? rv : RV_UNEXPECTED;
     }
 
+    if (ctx->forced && !ctx->allow_forced) {
+        rv = reject_file(ctx);
+        return (rv) ? rv : RV_REJECT;
+    }
+
     rv = get_filelen(ctx->filename, &filelen);
     if (rv == RV_NOENT) {
         if (ctx->fileoff) {
@@ -205,17 +214,19 @@ static int handle_push_request(struct catch_context *ctx)
             return (rv) ? rv : RV_OFFSET;
         }
     } else if (rv == 0) {
-        if (filelen == 0 && ctx->fileoff == 0 && ctx->filelen == 0) {
-            rv = send_short_msg(ctx->sk, MSG_ACK);
-            return (rv) ? rv : RV_DIGEST_MATCH;
-        } else if (filelen > ctx->filelen) {
-            rv = reject_file(ctx);
-            return (rv) ? rv : RV_LOCAL_BIGGER;
-        } else if (filelen != ctx->fileoff) {
-            rv = reject_file_offset(ctx, filelen);
-            return (rv) ? rv : RV_OFFSET;
+        if (!ctx->forced) {
+            if (filelen == 0 && ctx->fileoff == 0 && ctx->filelen == 0) {
+                rv = send_short_msg(ctx->sk, MSG_ACK);
+                return (rv) ? rv : RV_DIGEST_MATCH;
+            } else if (filelen > ctx->filelen) {
+                rv = reject_file(ctx);
+                return (rv) ? rv : RV_LOCAL_BIGGER;
+            } else if (filelen != ctx->fileoff) {
+                rv = reject_file_offset(ctx, filelen);
+                return (rv) ? rv : RV_OFFSET;
+            }
+            new_file = 0;
         }
-        new_file = 0;
     } else {
         int rv2 = reject_file(ctx);
         return (rv2) ? rv2 : rv;
@@ -245,7 +256,8 @@ int libcatch_handle_request(struct catch_context *ctx)
     if (rv)
         return rv;
 
-    if (req == MSG_PUSH) {
+    if (req == MSG_PUSH || req == MSG_FORCED_PUSH) {
+        ctx->forced = (req == MSG_FORCED_PUSH);
         rv = handle_push_request(ctx);
     } else {
         rv = RV_UNEXPECTED;

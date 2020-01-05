@@ -13,6 +13,7 @@ struct push_context {
     off_t filelen;
     Sock sk;
     int calc_digest;
+    int forced;
     volatile sig_atomic_t *terminate;
     void (*on_stage_change)(const struct push_context *ctx, int stage);
 };

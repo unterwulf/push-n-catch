@@ -47,8 +47,13 @@ static void on_stage_change(const struct catch_context *ctx, int stage)
 {
     switch (stage) {
     case CATCH_NEXT_FILE:
-        info("Push request of file %s (%lu bytes)", ctx->filename,
-             (unsigned long)ctx->filelen);
+        if (ctx->forced) {
+            info("Forced push request of file %s (%lu bytes)", ctx->filename,
+                 (unsigned long)ctx->filelen);
+        } else {
+            info("Push request of file %s (%lu bytes)", ctx->filename,
+                 (unsigned long)ctx->filelen);
+        }
         break;
     case CATCH_RECEIVE:
         if (!ctx->fileoff) {
@@ -79,6 +84,7 @@ static int handle_connection(tcp_Socket *sk)
     ctx.filename = filename;
     ctx.filenamesz = sizeof filename;
     ctx.calc_digest = use_digests;
+    ctx.allow_forced = use_force;
 
     while (!close_connection) {
         rv = libcatch_handle_request(&ctx);
@@ -96,6 +102,10 @@ static int handle_connection(tcp_Socket *sk)
             break;
         case RV_SIZE_MATCH:
             info("Already have this file (same size, digests not verified)");
+            break;
+        case RV_REJECT:
+            info("Rejected forced push of file %s (%lu bytes)",
+                 ctx.filename, (unsigned long)ctx.filelen);
             break;
         case RV_LOCAL_BIGGER:
             info("Rejected file %s (%lu bytes), local version is bigger",

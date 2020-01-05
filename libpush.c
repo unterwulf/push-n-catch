@@ -65,7 +65,7 @@ static int push_chunk(struct push_context *ctx, SHA1_CTX *sha1_ctx)
 
 static int send_push_request(struct push_context *ctx)
 {
-    fpp_msg_t msg = MSG_PUSH;
+    fpp_msg_t msg = ctx->forced ? MSG_FORCED_PUSH : MSG_PUSH;
     uint16_t namelen = strlen(ctx->filename);
     uint16_t be_namelen = htons(namelen);
     fpp_off_t be_fileoff = hton_offset(to_fpp_off(ctx->fileoff));
@@ -81,9 +81,11 @@ static int send_push_request(struct push_context *ctx)
     rv = send_entire(ctx->sk, ctx->filename, namelen);
     if (rv)
         return rv;
-    rv = send_entire(ctx->sk, &be_fileoff, sizeof be_fileoff);
-    if (rv)
-        return rv;
+    if (msg == MSG_PUSH) {
+        rv = send_entire(ctx->sk, &be_fileoff, sizeof be_fileoff);
+        if (rv)
+            return rv;
+    }
     rv = send_entire(ctx->sk, &be_filelen, sizeof be_filelen);
     return rv;
 }
@@ -165,7 +167,7 @@ int libpush_push_file(struct push_context *ctx)
             ctx->on_stage_change(ctx, PUSH_RESUME);
 
         rv = push_chunk(ctx, &sha1_ctx);
-    } else if (msg == MSG_REJECT_OFFSET && ctx->fileoff == 0) {
+    } else if (msg == MSG_REJECT_OFFSET && !ctx->forced && ctx->fileoff == 0) {
         /* Peer indicated that it already has our file. */
         fpp_off_t fpp_off;
         off_t fileoff;
